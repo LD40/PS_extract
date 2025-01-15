@@ -276,13 +276,13 @@ a {
     # initialize global map
     if gen_map: global_map = tile(staticmaps.tile_provider_ArcGISWorldImagery)
     # create .txt file
-    file_out = f"{extract_dir}\{trip_name}_{trip_start_date}.txt"
+    file_out = f"{extract_dir}{os.sep}{trip_name}_{trip_start_date}.txt"
     with open(file_out,'w', encoding="utf-8") as f_out:
         if local: # create css and index.htm file
-            css_file = open(f"{extract_dir}\local.css",'w', encoding="utf-8")
+            css_file = open(f"{extract_dir}{os.sep}local.css",'w', encoding="utf-8")
             css_file.write(css_text)
             css_file.close()
-            index_file = open(f"{extract_dir}\index.htm",'w', encoding="utf-8")
+            index_file = open(f"{extract_dir}{os.sep}index.htm",'w', encoding="utf-8")
             index_file.write(f"<head>\n    <link rel=\"stylesheet\" type=\"text/css\" href=\"local.css\">\n</head>\n<body>\n<h1>{trip_name}</h1>\n<p id=intro>")
             index_file.write(f"{trip_summary}, {round(total_distance)}km, {total_entries} steps, {trip_start_date}-{trip_end_date}\n<br><br>\n")
             if gen_map: index_file.write(f"<img src=\"steps_map.png\"></p>\n")
@@ -336,7 +336,7 @@ a {
             if local: # generate html content
                 index_file.write(f"<h2>{step_name} <small>{adjusted_date}</small></h2><a href=\"{step_id}.htm\">\n")
                 # create step related html file
-                step_file = open(f"{extract_dir}\{step_id}.htm",'w', encoding="utf-8")
+                step_file = open(f"{extract_dir}{os.sep}{step_id}.htm",'w', encoding="utf-8")
                 step_file.write(f"<head>\n    <link rel=\"stylesheet\" type=\"text/css\" href=\"local.css\">\n</head>\n<body>\n<h1>{step_name}</h1>\n<p id=intro>{country} {location_name} \U0001F538 {adjusted_date} \U0001F538 {weather}")
                 if temperature != None: step_file.write(f" {int(temperature)}°C")
                 step_file.write(f"\n<br><br>")
@@ -396,11 +396,11 @@ a {
                         new_height = 800
                         new_width = int(new_height / ratio)
                         resized_img = image.resize((new_width, new_height), Image.LANCZOS)
-                        resized_img.save(extract_dir+"\\"+'tmp.jpg') 
-                        new_size = Path(extract_dir+"\\"+'tmp.jpg').stat().st_size
+                        resized_img.save(extract_dir+os.sep+'tmp.jpg') 
+                        new_size = Path(extract_dir+os.sep+'tmp.jpg').stat().st_size
                         new_total_size = new_total_size + new_size
                         if verbose: text += f" compressible to {round(new_size/1024/102.4)/10}Mb"
-                        cfile = Path(f"{extract_dir}\\tmp.jpg")
+                        cfile = Path(f"{extract_dir}{os.sep}tmp.jpg")
                     else: new_total_size = new_total_size + initial_size
                     if verbose: text += ")\n"                  
                     if (mail or interactive): msg.add_attachment(cfile.read_bytes(), maintype=maintype, subtype=subtype, filename=f"img_{step_id}_{photo+1}")
@@ -438,7 +438,7 @@ a {
                 step_map.add_object(staticmaps.Marker(staticmaps.create_latlng(location_lat, location_lon), size=10))
                 map_image = step_map.render_cairo(300, 200) # define 300x200 pixel size for the image
                 map_name = f"map_{step_id}.png"
-                map_image.write_to_png(f"{extract_dir}\\{map_name}")
+                map_image.write_to_png(f"{extract_dir}{os.sep}{map_name}")
             if local: # generate step html file
                 if gen_map: index_file.write(f"<img class=\"thumb\" src=\"{map_name}\"> ") # add map to local html index file
                 if photos_nbr > 0: index_file.write(f"<img class=\"thumb\" src=\"{step_image}\">\n")
@@ -450,7 +450,7 @@ a {
                 if step_num <total_entries-1: step_file.write(f" | <a href=\"{data['all_steps'][step_num+1]['id']}.htm\">{data['all_steps'][step_num+1]['display_name']}</a> >")
                 step_file.write(f"</p>\n</body>\n")
                 step_file.close()
-            if gen_map: msg.add_attachment(Path(f"{extract_dir}\\{map_name}").read_bytes(), maintype='image', subtype='png', filename=map_name)
+            if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}{map_name}").read_bytes(), maintype='image', subtype='png', filename=map_name)
             # if exclude option is activated, skip first and last step. this avoid to add in the global map far origin for the travel
             if gen_map:
                 if (not exclude or (step_num!=0 and step_num!=len(data['all_steps'])-1)): 
@@ -473,7 +473,7 @@ a {
             elif mail: email(msg)
     # close .txt file
     f_out.close()
-    if os.path.exists(f"{extract_dir}\\tmp.jpg"): os.remove(f"{extract_dir}\\tmp.jpg")
+    if os.path.exists(f"{extract_dir}{os.sep}tmp.jpg"): os.remove(f"{extract_dir}{os.sep}tmp.jpg")
     if local: # add map to local index html file and close it
         if gen_map and not no_location: index_file.write(f"<br><br>\n<img src=\"trip_map.png\">")
         index_file.write("</p>\n</body>\n")
@@ -481,7 +481,7 @@ a {
     # finish global map generation for the travel in 800x600 pixels size
     if gen_map:
         global_map_image = global_map.render_cairo(800, 600)
-        global_map_image.write_to_png(f"{extract_dir}\\steps_map.png")
+        global_map_image.write_to_png(f"{extract_dir}{os.sep}steps_map.png")
     if mail or interactive: # generate global trip email
         if interactive:
             action = input("-->Generate global trip email ? (y)es, (n)o ? ")
@@ -494,7 +494,7 @@ a {
         msg["Date"] = creation_time.astimezone(to_zone)
         mess = f"{trip_summary}\n{country} {round(total_distance)}km, {total_entries} steps, {trip_start_date}-{trip_end_date}\n"
         msg.set_content(mess)
-        if gen_map: msg.add_attachment(Path(f"{extract_dir}\\steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
+        if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
         email(msg)
 
 # Function to print instructions of the script
@@ -579,7 +579,7 @@ if os.path.exists(map_file):
                 line = [staticmaps.create_latlng(p['lat'], p['lon']) for p in sorted_by_time]
                 trip_map.add_object(staticmaps.Line(line))
             trip_map_image = trip_map.render_cairo(800, 600)
-            trip_map_image.write_to_png(f"{extract_dir}\\trip_map.png")
+            trip_map_image.write_to_png(f"{extract_dir}{os.sep}trip_map.png")
             print(f"Trip map generated.")
             no_location = False
 else:
