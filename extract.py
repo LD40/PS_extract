@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # PS extract python script.
-# (C) 2024
+# (C) 2024-2025
 #
 # Initial author: LD40
 #
@@ -12,6 +12,7 @@ This program extracts data from Polarsteps JSON files, and allows to generate op
 - text file detailing steps
 - local html files allowing to browse steps
 - emails for each step to send to blogs to automaticaly generate articles
+- direct calls to Wordpress API
 Static maps are also automaticaly generated to enhance presentation in local html and emails  
 """
 import sys
@@ -32,16 +33,28 @@ try : # if error while importing graphic library then map generation is disabled
 except:
     gen_map = False
     print("! Map generation module not available.")
+import requests
+from requests.auth import HTTPBasicAuth
+from shutil import copy2
 
-# if these global email parameters are not set in the script they will be asked interactively when trying to send an email
-dest_email =  '' 
-orig_email = 'PS_extract@gmail.com' # enter here the email that you want to be displayed in email sent (it's not necessarily the email login used to connect to smtp server)
-mail_serv = 'smtp.gmail.com' # you can change for any other email provider server
-mail_port = 465 # change for smtp port your server expect to be called on
-mail_login = '' # put here your email login
-mail_passwd = '' # put here your password - for gmail should be an App password (16 letters)
+# HERE ARE THE EMAIL PARAMETERS TO FILL
+# global email parameters - if these parameters are not set in the script they will be asked interactively when trying to send an email
+dest_email = '' # enter here teh email address that should receive the generated emails like 'me@mywp.com'
+orig_email = 'PS_extract@gmail.com' # enter here the email that you want to be displayed in email sent (it's not necessarily the email login used to connect to smtp server) like 'myblog@mywp.com'
+mail_serv = 'smtp.gmail.com' # you can change for any other email provider server like 'smtp.myisp.com'
+mail_port = 465 # change for smtp port your server expect to be called on, probably 465 or 587 or 25
+mail_login = '' # put here your email login to be used with the mail server designated, like 'myname@myisp.com'
+mail_passwd = '' # put here your password - for gmail should be an App password (16 letters) like 'abcd efgh ijkl mnop'
+
+# HERE ARE THE WORDPRESS PARAMETERS TO FILL
+# Wordpress global parameters - if these parameters are not set in the script they will be asked interactively at start if wordpress option is chosen
+wp_api = 'wp-json/wp/v2/' # Wordpress API endpoint - not to be modified as teh script is intended to work with this version
+wp_url = '' # put here url of your Wordpress site like 'https://myblog.mywp.com'
+wp_username = '' # Wordpress user used to post article on your site, like 'MyUsername'
+wp_password = '' # Wordpress password (do not work with the user password, you need an app password to be defined for the chosen user in your Wordpress instance, like 'exAM PlEO f1WP ApPp aSsW 0rD4')
 
 # other global parameters
+def_width = 400 # default width for images in posts
 extract_dir = "Extracts"
 no_location = True # suppose there are no locations until json is parsed
 
@@ -49,9 +62,9 @@ no_location = True # suppose there are no locations until json is parsed
 mail = False
 local = False
 interactive = False
+wordpress = False
 verbose = False
 exclude = False
-
 
 # Function to generate map using tile name in parameter (allowed tiles by staticmaps listed bellow)
 if gen_map: 
@@ -78,8 +91,8 @@ def email(msg):
     global mail_login
     global mail_passwd
     # ask for undefined parameters
-    if dest_email == "": dest_email = input(f"--> Input destination address where emails should be sent (i.e. myblog.mywp.com): ") 
-    if orig_email == "": orig_email = input(f"--> Input email address you want to appear in sent emails (i.e. myaddress.myisp.com): ") 
+    if dest_email == "": dest_email = input(f"--> Input destination address where emails should be sent (i.e. me@mywp.com): ") 
+    if orig_email == "": orig_email = input(f"--> Input email address you want to appear in sent emails (i.e. myblog@mywp.com): ") 
     if mail_serv == "": mail_serv = input(f"--> Input email server that should be used to send emails (i.e. smtp.myisp.com): ") 
     if mail_port == "": mail_port = input(f"--> Input email server port that should be used to send emails (i.e. 465 or 587 or 25): ") 
     if mail_login == "": mail_login = input(f"--> Input email login that should be used to send emails (i.e. myname@myisp.com): ") 
@@ -98,6 +111,70 @@ def email(msg):
         print(e)
     return
 
+# Function to post tag to Wordpress
+def post_tag(tag_data):
+    global wp_url    
+    global wp_api
+    global wp_username
+    global wp_password
+    # ask for undefined parameters
+    if wp_url == "": wp_url = input(f"--> Input URL of your Wordpress instance (i.e. https://myblog.mywp.com): ") 
+    if wp_username == "": wp_username = input(f"--> Input Wordpress username you want to use to post your articles (i.e. MyUsername): ") 
+    if wp_password == "": wp_password = input(f"--> Input Wordpress app password for chosen username (i.e. exAM PlEO f1WP ApPp aSsW 0rD4): ")
+    tag_response = requests.post(
+        wp_url+wp_api+"tags",
+        auth=HTTPBasicAuth(wp_username, wp_password),
+        json=tag_data
+    )
+    # Verify answer
+    if tag_response.status_code != 201:
+        if tag_response.status_code == 400:        
+            tag_id = tag_response.json()['data']['term_id']
+            print("! Existing tag recovered:", tag_id)
+        else:
+            print("! Failed to upload tag. Status code:", tag_response.status_code)
+            print("! Error message:", tag_response.text)
+            tag_id = 0
+    else:
+        tag_id = tag_response.json()['id']   
+    return tag_id
+
+# Function to post media to Wordpress
+def post_media(media_data, name, type):
+    global wp_url    
+    global wp_api
+    global wp_username
+    global wp_password
+    # Initialy tryed to pass headers but causes problems for videos
+    # header = {'Content-Disposition': 'attachment; filename=\''+name+'\''}
+    # if type != '': header['Content-Type'] = type
+    media_response = requests.post(
+        wp_url+wp_api+"media",
+        auth=HTTPBasicAuth(wp_username, wp_password),
+        files=media_data,
+        #headers=header
+    )
+    # Verify answer
+    if media_response.status_code != 201:
+        print(f"! Failed to upload media {type}. Status code: {media_response.status_code}")
+        print(f"! Error message: {media_response.text}")  
+    return media_response
+    
+# Function to post new article to Wordpress
+def post_article(post_data):
+    global wp_url    
+    global wp_api
+    global wp_username
+    global wp_password    
+    post_response = requests.post(
+        wp_url+wp_api+"posts",
+        auth=HTTPBasicAuth(wp_username, wp_password),
+        json=post_data
+    )   
+    if post_response.status_code != 201:
+        print("! Failed to publish the post. Status code:", post_response.status_code)
+        print("! Error message:", post_response.text)  
+    return post_response
    
 # Function to parse data and generate different items depending on options selected  
 def parse_data(data, original_path, extract_dir):
@@ -105,7 +182,7 @@ def parse_data(data, original_path, extract_dir):
     # Function to return last modification time of the file in parameter
     def get_modif_time(entry):
         return entry.stat().st_mtime
-        
+            
     # get global parameters
     global mail
     global local
@@ -272,7 +349,7 @@ a {
     else: phone_type = "?"
     timezone_id = data['timezone_id']
     total_entries = data['step_count']
-    
+    tag = 0
     # initialize global map
     if gen_map: global_map = tile(staticmaps.tile_provider_ArcGISWorldImagery)
     # create .txt file
@@ -290,6 +367,7 @@ a {
         text += f"Start Date: {trip_start_date}\nEnd Date: {trip_end_date}\n"
         text += f"Total Distance: {round(total_distance)}(km) in {total_entries} steps\n"
         if verbose: text += f"User Timezone: {timezone_id}\nRecording Device: {phone_type}\n"
+
         text += "____________________\n"
         if interactive: print(text)
         f_out.write(text+"\n")       
@@ -301,7 +379,7 @@ a {
             step_slug = entry['slug']
             step_name = entry['display_name']
             to_zone = tz.gettz(timezone_id)
-            # prefer start time of the step than the creation time in PS as the time of teh step to be displayed
+            # prefer start time of the step than the creation time in PS as the time of the step to be displayed
             creation_time = datetime.datetime.fromtimestamp(entry['start_time'])
             creation_time = creation_time.replace(tzinfo = from_zone)
             adjusted_time = creation_time.astimezone(to_zone)
@@ -339,7 +417,7 @@ a {
                 step_file = open(f"{extract_dir}{os.sep}{step_id}.htm",'w', encoding="utf-8")
                 step_file.write(f"<head>\n    <link rel=\"stylesheet\" type=\"text/css\" href=\"local.css\">\n</head>\n<body>\n<h1>{step_name}</h1>\n<p id=intro>{country} {location_name} \U0001F538 {adjusted_date} \U0001F538 {weather}")
                 if temperature != None: step_file.write(f" {int(temperature)}°C")
-                step_file.write(f"\n<br><br>")
+                step_file.write(f"\n<br><br>")  
             # generate email structure
             msg = EmailMessage()
             msg['Subject'] = step_name
@@ -348,6 +426,15 @@ a {
             if temperature != None: mess += f"{int(temperature)}°C"
             mess += f"\n\n{journal}\n"
             msg.set_content(mess)
+           # generate wordpress content structure
+            post_data = {
+                'title': step_name,
+                'date' : str(creation_time),
+                'content': mess,
+                'status': 'publish',
+                'comment_status': 'open',
+                'ping_status': 'open'
+            }         
             # initialize counters before parsing photos and videos related to this step
             photos_nbr = 0
             videos_nbr = 0
@@ -370,17 +457,18 @@ a {
                     sorted_videos = [entry.name for entry in sorted_entries]
                     videos_nbr = len(sorted_videos)
             # parse photos
-            if photos_nbr > 0: 
+            if photos_nbr > 0:
+                img_att = {}
+                img_ratio = {}
                 for photo, f in enumerate(sorted_photos):
                     cfile = Path(f"{os.getcwd()}\\{step_slug}_{step_id}\\photos\\{f}")
                     initial_size = cfile.stat().st_size
                     if verbose: text += f"Photo {photo+1}: {f} ({round(initial_size/1024/102.4)/10}Mb"
-                    ctype, encoding = mimetypes.guess_type(cfile)
-                    if ctype is None or encoding is not None: ctype = 'image/jpeg'
-                    maintype, subtype = ctype.split('/', 1)
                     total_size = total_size + initial_size
                     image = Image.open(cfile)
                     width, height = image.size 
+                    img_ratio[photo] = height / width
+                    img_att[photo] = cfile
                     if local: # add photo (in gallery mode) to the step html file and previous/next links
                         step_file.write(f"<a href=\"#img{photo+1}\"><img class=\"thumb\" src=\"..\\{step_slug}_{step_id}\\photos\\{f}\"></a>\n")
                         step_file.write(f"<div class=\"lightbox\" id=\"img{photo+1}\">\n")
@@ -389,30 +477,27 @@ a {
                         step_file.write(f"<a href=\"#_\" class=\"btn-close\">X</a>\n<img src=\"..\\{step_slug}_{step_id}\\photos\\{f}\">\n")
                         if photo+1 < photos_nbr: step_file.write(f"<a href=\"#img{photo+2}\" class=\"light-btn btn-next\">></a>\n</div>\n")
                         elif videos_nbr > 0: step_file.write(f"<a href=\"#vid1\" class=\"light-btn btn-next\">></a>\n</div>\n")
-                        else: step_file.write(f"</div>\n")
-                    # generated resized image to limit size to be sent by email if necessary
-                    if (mail or interactive) and height > 800:
-                        ratio = height / width
-                        new_height = 800
-                        new_width = int(new_height / ratio)
+                        else: step_file.write(f"</div>\n")                       
+                    # generate resized image to limit size to be sent by email if necessary
+                    if (mail or interactive) and height > def_width*2:
+                        new_height = def_width*2
+                        new_width = int(new_height / img_ratio[photo])
+                        dst_file = Path(f"{extract_dir}{os.sep}{step_slug}_{photo}.jpg")
                         resized_img = image.resize((new_width, new_height), Image.LANCZOS)
-                        resized_img.save(extract_dir+os.sep+'tmp.jpg') 
-                        new_size = Path(extract_dir+os.sep+'tmp.jpg').stat().st_size
+                        resized_img.save(dst_file) 
+                        new_size = dst_file.stat().st_size
                         new_total_size = new_total_size + new_size
                         if verbose: text += f" compressible to {round(new_size/1024/102.4)/10}Mb"
-                        cfile = Path(f"{extract_dir}{os.sep}tmp.jpg")
+                        img_att[photo] = dst_file
                     else: new_total_size = new_total_size + initial_size
-                    if verbose: text += ")\n"                  
-                    if (mail or interactive): msg.add_attachment(cfile.read_bytes(), maintype=maintype, subtype=subtype, filename=f"img_{step_id}_{photo+1}")
+                    if verbose: text += f")\n"
             # parse videos
             if videos_nbr > 0: 
+                vid_att = {}
                 for video,f in enumerate(sorted_videos):
                     cfile = Path(f"{os.getcwd()}\\{step_slug}_{step_id}\\videos\\{f}")
                     initial_size = cfile.stat().st_size
                     if verbose: text += f"Video {video}: {f} ({round(initial_size/1024/102.4)/10}Mb)\n"
-                    ctype, encoding = mimetypes.guess_type(cfile)
-                    if ctype is None or encoding is not None: ctype = 'video/mp4'
-                    maintype, subtype = ctype.split('/', 1)
                     total_size = total_size + initial_size
                     new_total_size = new_total_size + initial_size
                     if local: # add video (in gallery mode) to the step html file and previous/next links
@@ -425,18 +510,19 @@ a {
                         step_file.write(f"<a href=\"#_\" class=\"btn-close\">X</a>\n<video controls src=\"..\\{step_slug}_{step_id}\\videos\\{f}\"></video>\n")
                         if video+1 < videos_nbr: step_file.write(f"<a href=\"#vid{video+2}\" class=\"light-btn btn-next\">></a>\n</div>\n")
                         else: step_file.write(f"</div>\n")
-                    if (mail or interactive): msg.add_attachment(cfile.read_bytes(), maintype=maintype, subtype=subtype, filename=f"vid_{step_id}_{video+1}")
+                    vid_att[photo] = cfile
             text += f"{photos_nbr} photo(s), {videos_nbr} video(s) ({round(total_size/1024/102.4)/10}Mb"
             if (mail or interactive): text += f" compressible to {round(new_total_size/1024/102.4)/10}Mb"
             text += ")\n____________________\n"
             if interactive: print(text)
             f_out.write(f"{text}\n")
+            text = ""
             # generate map for the step with only a marker on the step location
             if gen_map:
                 step_map = tile(staticmaps.tile_provider_OSM)
                 step_map.set_zoom(6) # define static zoom level
                 step_map.add_object(staticmaps.Marker(staticmaps.create_latlng(location_lat, location_lon), size=10))
-                map_image = step_map.render_cairo(300, 200) # define 300x200 pixel size for the image
+                map_image = step_map.render_cairo(def_width, int(def_width/3*2)) # define 300x200 pixel size for the image if def_width=300
                 map_name = f"map_{step_id}.png"
                 map_image.write_to_png(f"{extract_dir}{os.sep}{map_name}")
             if local: # generate step html file
@@ -450,42 +536,129 @@ a {
                 if step_num <total_entries-1: step_file.write(f" | <a href=\"{data['all_steps'][step_num+1]['id']}.htm\">{data['all_steps'][step_num+1]['display_name']}</a> >")
                 step_file.write(f"</p>\n</body>\n")
                 step_file.close()
-            if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}{map_name}").read_bytes(), maintype='image', subtype='png', filename=map_name)
             # if exclude option is activated, skip first and last step. this avoid to add in the global map far origin for the travel
             if gen_map:
                 if (not exclude or (step_num!=0 and step_num!=len(data['all_steps'])-1)): 
                     global_map.add_object(staticmaps.Marker(staticmaps.create_latlng(location_lat, location_lon), size=10))
                 else: print(f"Skipping marker addition for step {step_num+1} ({round(location_lat,1)},{round(location_lon,1)}) in global map")
             # if interactive mode is active, it will ask what to do for each step
+            action = ""
             if interactive:
-                action = input(f"--> Action for step {step_num+1} [{step_name}] ? (s)kip (default), (e)mail, (q)uit ? ")
-                if action =="q" or action == "quit": 
+                prompt = f"--> Action for step {step_num+1} [{step_name}] ? (s)kip this step, (e)mail, (w)ordpress, (q)uit or continue (default - activated options:"
+                if wordpress:   prompt += " wordpress"
+                if mail:       prompt += " email"
+                prompt += " -) ? "
+                action = input(prompt)
+                if action == "q":   action = "quit"
+                elif action == "s": action = "skip"
+                elif action == "e": action = "email"
+                elif action == "w": action = "wordpress"
+                if action =="quit": 
                     print("...exiting")
                     return
-                elif action =="e" or action =="email":
-                    print("...mailing this step")
+            if action!="skip":
+                if action =="email" or (mail and action !="wordpress"):
+                    if interactive: print("...mailing this step")
+                    if photos_nbr > 0:
+                        for photo in range(photos_nbr):
+                            ctype, encoding = mimetypes.guess_type(img_att[photo])
+                            if ctype is None or encoding is not None: ctype = 'image/jpeg'
+                            maintype, subtype = ctype.split('/', 1)
+                            msg.add_attachment(img_att[photo].read_bytes(), maintype=maintype, subtype=subtype, filename=f"img_{step_id}_{photo+1}")
+                            # If resized image exists, delete it
+                            if img_att[photo] != Path(f"{os.getcwd()}\\{step_slug}_{step_id}\\photos\\{photo}"): os.remove(img_att[photo])
+                    if videos_nbr > 0: 
+                        for video in range(videos_nbr):
+                            ctype, encoding = mimetypes.guess_type(cfile)
+                            if ctype is None or encoding is not None: ctype = 'video/mp4'
+                            maintype, subtype = ctype.split('/', 1)
+                            msg.add_attachment(vid_att[photo].read_bytes(), maintype=maintype, subtype=subtype, filename=f"vid_{step_id}_{video+1}")
+                    if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}{map_name}").read_bytes(), maintype='image', subtype='png', filename=map_name)
                     email(msg) 
-                elif action =="s" or action=="skip" or action=="": 
-                    print("...jumping to next step")
-                else: 
-                    print("...resuming")
-                    if mail: email(msg)
-            elif mail: email(msg)
+                if action =="wordpress" or (wordpress and action !="email"):
+                    if interactive: print("...post this step on Wordpress")
+                    # Upload tag
+                    if tag == 0:
+                        tag_data = {'name' : trip_name}
+                        tag = post_tag(tag_data)
+                        if verbose and tag != 0: text += f"Added {trip_name} tag to Wordpress with ID {tag}\n"
+                    post_data['tags'] = tag
+                    if photos_nbr > 0:
+                        for photo in range(photos_nbr):
+                            # create a renamed copy of the file
+                            dst_file = Path(f"{extract_dir}{os.sep}{step_slug}_{photo}.jpg")
+                            # make sure to get the original image and not resized one
+                            copy2(Path(f"{os.getcwd()}\\{step_slug}_{step_id}\\photos\\{sorted_photos[photo]}"),dst_file)
+                            dfile = open(dst_file, 'rb')
+                            media_data = {'file' : dfile}  
+                            # upload image
+                            media_response = post_media(media_data, f"{step_slug}_{photo}.jpg", 'image/jpeg')
+                            dfile.close()
+                            os.remove(dst_file)
+                            if media_response.status_code == 201:
+                                if img_ratio[photo] <1:
+                                    new_width = def_width
+                                    new_height = int(new_width*img_ratio[photo])
+                                else:
+                                    new_height = def_width
+                                    new_width = int(new_height/img_ratio[photo])
+                                post_data['content'] = post_data['content'] + f"\n<a href='{media_response.json()['source_url']}'><img decoding='async' src='{media_response.json()['source_url']}' width='{new_width}' height='{new_height}' class='alignnone' alt=''></a>"  
+                                if photo==0: post_data['featured_media'] = media_response.json()['id']
+                                if verbose: text += f"Uploaded media {step_slug}_{photo}.jpg with ID: {media_response.json()['id']}\n" 
+                    if videos_nbr > 0: 
+                        for video in range(videos_nbr):
+                            # create a renamed copy of the file
+                            dst_file = Path(f"{extract_dir}{os.sep}{step_slug}_{video}.mp4")
+                            copy2(Path(f"{os.getcwd()}\\{step_slug}_{step_id}\\videos\\{sorted_videos[video]}"),dst_file)
+                            dfile = open(dst_file, 'rb')
+                            media_data = {'file': dfile}
+                            # Upload video
+                            media_response = post_media(media_data,  f"{step_slug}_{video}.mp4", 'video/mp4')
+                            dfile.close()
+                            os.remove(dst_file)
+                            if media_response.status_code == 201:
+                                ratio = media_response.json()['media_details']['height'] / media_response.json()['media_details']['width']
+                                if ratio <1:
+                                    new_width = def_width
+                                    new_height = int(new_width*ratio)
+                                else:
+                                    new_height = def_width
+                                    new_width = int(new_height/ratio)
+                                post_data['content'] = post_data['content'] +f"\n<a href='{media_response.json()['source_url']}'><video width='{new_width}' height='{new_height}' controls='controls'><source src='{media_response.json()['source_url']}' type='video/mp4'></video></a>"
+                                if photos_nbr==0 and video==0: post_data['featured_media'] = media_response.json()['id']
+                                if verbose: text += f"Uploaded media {step_slug}_{video}.mp4 with ID: {media_response.json()['id']}\n"
+                    if gen_map:
+                        # Upload media
+                        media_data = {'file': open(Path(f"{extract_dir}{os.sep}{map_name}"), 'rb')}
+                        media_response = post_media(media_data,map_name,'image/jpeg')
+                        if media_response.status_code == 201: 
+                            post_data['content'] = post_data['content'] + f"\n<a href='{media_response.json()['source_url']}'><img src='{media_response.json()['source_url']}'  class='alignnone'></a>"
+                            if verbose: text += f"Uploaded generated step map {map_name} with ID: {media_response.json()['id']}\n"
+                    response = post_article(post_data) 
+                    if verbose and response.status_code == 201:
+                        text += f"Article {response.json()['link']} posted on Wordpress successfully \n"
+                if action != "email" and action != "wordpress": 
+                    if interactive: print("...resuming")
+            else: print("...jumping to next step")
+            if interactive: print(text)
+            f_out.write(f"{text}\n")
     # close .txt file
     f_out.close()
-    if os.path.exists(f"{extract_dir}{os.sep}tmp.jpg"): os.remove(f"{extract_dir}{os.sep}tmp.jpg")
     if local: # add map to local index html file and close it
         if gen_map and not no_location: index_file.write(f"<br><br>\n<img src=\"trip_map.png\">")
         index_file.write("</p>\n</body>\n")
         index_file.close()
-    # finish global map generation for the travel in 800x600 pixels size
+    # finish global map generation for the travel in 800x600 pixels size if def_width=400
     if gen_map:
-        global_map_image = global_map.render_cairo(800, 600)
+        global_map_image = global_map.render_cairo(def_width*2, int(def_width/2*3))
         global_map_image.write_to_png(f"{extract_dir}{os.sep}steps_map.png")
-    if mail or interactive: # generate global trip email
+    if mail or interactive or wordpress: # generate global trip post
+        action = ""
         if interactive:
-            action = input("-->Generate global trip email ? (y)es, (n)o ? ")
-            if action == "n" or action == "no": return
+            action = input("--> Generate global trip post ? (s)kip map generation, (e)mail, (w)ordpress or continue (default) with activated options ? ")
+            if action == "s" or action == "skip": return
+            elif action == "e": action = "email"
+            elif action == "w": action = "wordpress"
         msg = EmailMessage()
         msg['Subject'] = trip_name
         to_zone = tz.gettz(timezone_id)
@@ -494,8 +667,31 @@ a {
         msg["Date"] = creation_time.astimezone(to_zone)
         mess = f"{trip_summary}\n{country} {round(total_distance)}km, {total_entries} steps, {trip_start_date}-{trip_end_date}\n"
         msg.set_content(mess)
-        if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
-        email(msg)
+        if action == "email" or (mail and action != "wordpress"):
+            if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
+            email(msg)
+        if action == "wordpress" or (wordpress and action != "email"):
+            if tag == 0:
+                tag_data = {'name' : trip_name}
+                tag = post_tag(tag_data)
+                if verbose and tag != 0: text += f"Added {trip_name} tag to Wordpress with ID {tag}\n"
+            # generate wordpress content
+            post_data = {
+                'title': trip_name,
+                'date' : str(creation_time),
+                'content': mess,
+                'status': 'publish',
+                'tags': tag,
+                'comment_status': 'open',
+                'ping_status': 'open'
+            }
+            # Upload media
+            media_data = {'file': open(Path(f"{extract_dir}{os.sep}steps_map.png"), 'rb')}
+            media_response = post_media(media_data,'steps_map.png','image/jpeg')
+            if media_response.status_code == 201:
+                post_data['content'] = post_data['content'] + f"\n<img src='{media_response.json()['source_url']}' class='alignnone'></a>" 
+                post_data['featured_media'] = media_response.json()['id']
+                post_article(post_data)
 
 # Function to print instructions of the script
 def printInstructions():
@@ -506,13 +702,14 @@ For easy use, copy extract.py script in that place.
 Run this program with the following command :
     python3 (/path_to_program_directory/)extract.py [options]
 The program will create an 'Extracts' directory and extract in it all informations from your Polarsteps data in a readable text file (.txt), and some automatically generated static maps (PNG files) of your trip and steps.
-In addition, you can ask to generate localy browsable HTML pages to navigate trough your steps, and/or generate emails for each steps (with text, images and videos from your steps). It is possible to extract data step by step in interactive mode, or to generate all files for the whole trip.
+In addition, you can ask to generate localy browsable HTML pages to navigate trough your steps, and/or generate emails for each steps (with text, images and videos from your steps) and/or direct calls to Wordpress API to insert posts. It is possible to extract data step by step in interactive mode, or to generate all files for the whole trip.
 
 Here are the additional options that could be combined and put at launch:
 -v, -verbose :                  to add additional information in the generated text file
 -l, -local :                    to generate local html files to navigate the steps
+-w, -wordpress :                to generate API calls to Wordpress instance defined in script's global parameters
 -e, -email address@domain.com : to send emails containing description, images and videos from extracted steps to the given address (for example to fill a blog like blogger or wordpress using postie plugin) ; consider putting your common email server parameters directly in the script to avoid having to type them everytime you execute the script
--i, -interactive :              to display an analysis and interactively ask what to do for each step (skip, email, continue or quit)
+-i, -interactive :              to display the analysis and interactively ask what to do for each step (skip, email, continue or quit)
 -x, -exclude :                  to exclude the first and last steps from generated maps presenting the whole trip (allow to focus the map when origin country is far away)
 anything else will display this help
 """)
@@ -539,6 +736,9 @@ if args_nb > 0:
                 print(f"! Not enough arguments : missing destination email")
                 printInstructions()
                 exit()
+        elif strParam == "-wordpress" or strParam == "-w": 
+            wordpress = True 
+            print(f"Wordpress option activated.")
         elif strParam == "-exclude" or strParam == "-x": 
             exclude = True 
             print(f"Exclude option activated.")
@@ -578,13 +778,13 @@ if os.path.exists(map_file):
             if len(sorted_by_time)>1:
                 line = [staticmaps.create_latlng(p['lat'], p['lon']) for p in sorted_by_time]
                 trip_map.add_object(staticmaps.Line(line))
-            trip_map_image = trip_map.render_cairo(800, 600)
+            trip_map_image = trip_map.render_cairo(def_width*2, int(def_width/2*3))
             trip_map_image.write_to_png(f"{extract_dir}{os.sep}trip_map.png")
             print(f"Trip map generated.")
             no_location = False
 else:
     print(f"! Locations file ({map_file}) not found.") 
-# analyse trip file (with the most important informtion to extract)
+# analyse trip file (with the most important information to extract)
 if os.path.exists(trip_file):
     print(f"Extracting steps from {trip_file} file...")
     with open(trip_file, encoding="utf-8" ) as f_in:
