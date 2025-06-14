@@ -49,6 +49,7 @@ mail_passwd = '' # put here your password - for gmail should be an App password 
 # HERE ARE THE WORDPRESS PARAMETERS TO FILL
 # Wordpress global parameters - if these parameters are not set in the script they will be asked interactively at start if wordpress option is chosen
 wp_api = 'wp-json/wp/v2/' # Wordpress API endpoint - not to be modified as teh script is intended to work with this version
+wp_mode = 'publish' # define mode to be used for post publication 'publish', 'future', 'draft', 'pending', 'private'
 wp_url = '' # put here url of your Wordpress site like 'https://myblog.mywp.com'
 wp_username = '' # Wordpress user used to post article on your site, like 'MyUsername'
 wp_password = '' # Wordpress password (do not work with the user password, you need an app password to be defined for the chosen user in your Wordpress instance, like 'exAM PlEO f1WP ApPp aSsW 0rD4')
@@ -113,8 +114,8 @@ def email(msg):
 
 # Function to post tag to Wordpress
 def post_tag(tag_data):
-    global wp_url    
     global wp_api
+    global wp_url
     global wp_username
     global wp_password
     # ask for undefined parameters
@@ -141,8 +142,8 @@ def post_tag(tag_data):
 
 # Function to post media to Wordpress
 def post_media(media_data, name, type):
-    global wp_url    
     global wp_api
+    global wp_url
     global wp_username
     global wp_password
     # Initialy tryed to pass headers but causes problems for videos
@@ -159,13 +160,29 @@ def post_media(media_data, name, type):
         print(f"! Failed to upload media {type}. Status code: {media_response.status_code}")
         print(f"! Error message: {media_response.text}")  
     return media_response
-    
+
+# Function to link a post to a media in Wordpress
+def attach_media(media_id, post_id):
+    global wp_url
+    global wp_username
+    global wp_password
+    media_response = requests.post(
+        wp_url+wp_api+"media/"+str(media_id),
+        auth=HTTPBasicAuth(wp_username, wp_password),
+        json={'post' : post_id}
+    )
+    # Verify answer
+    if media_response.status_code != 200:
+        print(f"! Failed to link media {media_id} to post {post_id}. Status code: {media_response.status_code}")
+        print(f"! Error message: {media_response.text}")  
+    return media_response
+  
 # Function to post new article to Wordpress
 def post_article(post_data):
-    global wp_url    
     global wp_api
+    global wp_url
     global wp_username
-    global wp_password    
+    global wp_password   
     post_response = requests.post(
         wp_url+wp_api+"posts",
         auth=HTTPBasicAuth(wp_username, wp_password),
@@ -190,6 +207,7 @@ def parse_data(data, original_path, extract_dir):
     global verbose
     global exclude
     global no_location
+    global wp_mode  
     # define table to use special UTF-8 characters (emoticon) to weather conditions and countries
     weather_dict = {"rain":"\U0001F327","clear-day":"\U0001F506","partly-cloudy-day":"\U000026C5","snow":"\U000026C4","cloudy":"\U00002601"}
     country_dict = { #these countries denominations have been tested as used by PS in 2024/07
@@ -431,7 +449,7 @@ a {
                 'title': step_name,
                 'date' : str(creation_time),
                 'content': mess,
-                'status': 'publish',
+                'status': wp_mode,
                 'comment_status': 'open',
                 'ping_status': 'open'
             }         
@@ -583,6 +601,7 @@ a {
                         tag = post_tag(tag_data)
                         if verbose and tag != 0: text += f"Added {trip_name} tag to Wordpress with ID {tag}\n"
                     post_data['tags'] = tag
+                    media = []
                     if photos_nbr > 0:
                         for photo in range(photos_nbr):
                             # create a renamed copy of the file
@@ -604,7 +623,8 @@ a {
                                     new_width = int(new_height/img_ratio[photo])
                                 post_data['content'] = post_data['content'] + f"\n<a href='{media_response.json()['source_url']}'><img decoding='async' src='{media_response.json()['source_url']}' width='{new_width}' height='{new_height}' class='alignnone' alt=''></a>"  
                                 if photo==0: post_data['featured_media'] = media_response.json()['id']
-                                if verbose: text += f"Uploaded media {step_slug}_{photo}.jpg with ID: {media_response.json()['id']}\n" 
+                                if verbose: text += f"Uploaded media {step_slug}_{photo}.jpg with ID: {media_response.json()['id']}\n"
+                                media.append(media_response.json()['id'])                                
                     if videos_nbr > 0: 
                         for video in range(videos_nbr):
                             # create a renamed copy of the file
@@ -627,6 +647,7 @@ a {
                                 post_data['content'] = post_data['content'] +f"\n<a href='{media_response.json()['source_url']}'><video width='{new_width}' height='{new_height}' controls='controls'><source src='{media_response.json()['source_url']}' type='video/mp4'></video></a>"
                                 if photos_nbr==0 and video==0: post_data['featured_media'] = media_response.json()['id']
                                 if verbose: text += f"Uploaded media {step_slug}_{video}.mp4 with ID: {media_response.json()['id']}\n"
+                                media.append(media_response.json()['id'])
                     if gen_map:
                         # Upload media
                         media_data = {'file': open(Path(f"{extract_dir}{os.sep}{map_name}"), 'rb')}
@@ -634,65 +655,79 @@ a {
                         if media_response.status_code == 201: 
                             post_data['content'] = post_data['content'] + f"\n<a href='{media_response.json()['source_url']}'><img src='{media_response.json()['source_url']}'  class='alignnone'></a>"
                             if verbose: text += f"Uploaded generated step map {map_name} with ID: {media_response.json()['id']}\n"
+                            media.append(media_response.json()['id'])
                     response = post_article(post_data) 
                     if verbose and response.status_code == 201:
                         text += f"Article {response.json()['link']} posted on Wordpress successfully \n"
+                        if media:
+                            for m in media:
+                                attach_media(m,response.json()['id'])
+                            text += f"{len(media)} medias linked to post {response.json()['id']} \n"
                 if action != "email" and action != "wordpress": 
                     if interactive: print("...resuming")
             else: print("...jumping to next step")
             if interactive: print(text)
             f_out.write(f"{text}\n")
+            # end of step parsing
+        # end of trip parsing
+        if local: # add map to local index html file and close it
+            if gen_map and not no_location: index_file.write(f"<br><br>\n<img src=\"trip_map.png\">")
+            index_file.write("</p>\n</body>\n")
+            index_file.close()
+        # finish global map generation for the travel in 800x600 pixels size if def_width=400
+        if gen_map:
+            global_map_image = global_map.render_cairo(def_width*2, int(def_width/2*3))
+            global_map_image.write_to_png(f"{extract_dir}{os.sep}steps_map.png")
+        if mail or interactive or wordpress: # generate global trip post
+            text = ""
+            action = ""
+            if interactive:
+                action = input("--> Generate global trip post ? (s)kip map generation, (e)mail, (w)ordpress or continue (default) with activated options ? ")
+                if action == "s" or action == "skip": return
+                elif action == "e": action = "email"
+                elif action == "w": action = "wordpress"
+            msg = EmailMessage()
+            msg['Subject'] = trip_name
+            to_zone = tz.gettz(timezone_id)
+            creation_time = datetime.datetime.fromtimestamp(data['start_date'])
+            creation_time = creation_time.replace(tzinfo = from_zone) # mark the TZ as UTC
+            msg["Date"] = creation_time.astimezone(to_zone)
+            mess = f"{trip_summary}\n{country} {round(total_distance)}km, {total_entries} steps, {trip_start_date}-{trip_end_date}\n"
+            msg.set_content(mess)
+            if action == "email" or (mail and action != "wordpress"):
+                if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
+                email(msg)
+            if action == "wordpress" or (wordpress and action != "email"):
+                if tag == 0:
+                    tag_data = {'name' : trip_name}
+                    tag = post_tag(tag_data)
+                    if verbose and tag != 0: text += f"Added {trip_name} tag to Wordpress with ID {tag}\n"
+                # generate wordpress content
+                post_data = {
+                    'title': trip_name,
+                    'date' : str(creation_time),
+                    'content': mess,
+                    'status': wp_mode,
+                    'tags': tag,
+                    'comment_status': 'open',
+                    'ping_status': 'open'
+                }
+                # Upload media
+                media_data = {'file': open(Path(f"{extract_dir}{os.sep}steps_map.png"), 'rb')}
+                media_response = post_media(media_data,'steps_map.png','image/jpeg')
+                if media_response.status_code == 201:
+                    post_data['content'] = post_data['content'] + f"\n<img src='{media_response.json()['source_url']}' class='alignnone'></a>" 
+                    post_data['featured_media'] = media_response.json()['id']
+                    response = post_article(post_data)
+                    if verbose and response.status_code == 201:
+                        text += f"Article {response.json()['link']} on global trip posted on Wordpress successfully \n"
+                        attach_media(media_response.json()['id'],response.json()['id'])
+                        text += f"Global map {media_response.json()['id']} linked to post {response.json()['id']} \n"
+            if interactive: print(text)
+            f_out.write(f"{text}\n")
     # close .txt file
     f_out.close()
-    if local: # add map to local index html file and close it
-        if gen_map and not no_location: index_file.write(f"<br><br>\n<img src=\"trip_map.png\">")
-        index_file.write("</p>\n</body>\n")
-        index_file.close()
-    # finish global map generation for the travel in 800x600 pixels size if def_width=400
-    if gen_map:
-        global_map_image = global_map.render_cairo(def_width*2, int(def_width/2*3))
-        global_map_image.write_to_png(f"{extract_dir}{os.sep}steps_map.png")
-    if mail or interactive or wordpress: # generate global trip post
-        action = ""
-        if interactive:
-            action = input("--> Generate global trip post ? (s)kip map generation, (e)mail, (w)ordpress or continue (default) with activated options ? ")
-            if action == "s" or action == "skip": return
-            elif action == "e": action = "email"
-            elif action == "w": action = "wordpress"
-        msg = EmailMessage()
-        msg['Subject'] = trip_name
-        to_zone = tz.gettz(timezone_id)
-        creation_time = datetime.datetime.fromtimestamp(data['start_date'])
-        creation_time = creation_time.replace(tzinfo = from_zone) # mark the TZ as UTC
-        msg["Date"] = creation_time.astimezone(to_zone)
-        mess = f"{trip_summary}\n{country} {round(total_distance)}km, {total_entries} steps, {trip_start_date}-{trip_end_date}\n"
-        msg.set_content(mess)
-        if action == "email" or (mail and action != "wordpress"):
-            if gen_map: msg.add_attachment(Path(f"{extract_dir}{os.sep}steps_map.png").read_bytes(), maintype='image', subtype='png', filename=f"map_{trip_name}.png")
-            email(msg)
-        if action == "wordpress" or (wordpress and action != "email"):
-            if tag == 0:
-                tag_data = {'name' : trip_name}
-                tag = post_tag(tag_data)
-                if verbose and tag != 0: text += f"Added {trip_name} tag to Wordpress with ID {tag}\n"
-            # generate wordpress content
-            post_data = {
-                'title': trip_name,
-                'date' : str(creation_time),
-                'content': mess,
-                'status': 'publish',
-                'tags': tag,
-                'comment_status': 'open',
-                'ping_status': 'open'
-            }
-            # Upload media
-            media_data = {'file': open(Path(f"{extract_dir}{os.sep}steps_map.png"), 'rb')}
-            media_response = post_media(media_data,'steps_map.png','image/jpeg')
-            if media_response.status_code == 201:
-                post_data['content'] = post_data['content'] + f"\n<img src='{media_response.json()['source_url']}' class='alignnone'></a>" 
-                post_data['featured_media'] = media_response.json()['id']
-                post_article(post_data)
-
+                    
 # Function to print instructions of the script
 def printInstructions():
     print("""
